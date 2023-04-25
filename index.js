@@ -37,12 +37,14 @@ app.get('/proxy', (req, res) => {
 
 app.use('/graphql/query', createProxyMiddleware({
     target: 'https://www.instagram.com',
+    secure: true,
     changeOrigin: true,
-    pathRewrite: {
+    pathRewrite: { 
         '^/graphql/query': '/graphql/query/'
     },
     headers: {
-        'Referer': 'https://www.instagram.com/'
+        "Referer": "https://www.instagram.com",
+        "Origin": "https://www.instagram.com"
     }
 }));
 
