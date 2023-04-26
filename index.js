@@ -8,6 +8,9 @@ const fetch = require('node-fetch');
 let port = 4000;
 app.use(cors());
 
+app.get('/', (req, res) => {
+    res.send("Hello from me!!");
+});
 app.get('/proxy', (req, res) => {
     const fileUrl = req.query.url; // Get the URL from the query parameter
     const fileName = req.query.fileName; // Extract the filename from the URL
