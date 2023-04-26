@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 const axios = require('axios');
+const fetch = require('node-fetch');
 
 let port = 4000;
 app.use(cors());
@@ -29,18 +30,20 @@ app.get('/proxy', (req, res) => {
         });
 });
 
-app.use('/graphql/query', createProxyMiddleware({
-    target: 'https://www.instagram.com',
-    secure: true,
-    changeOrigin: true,
-    pathRewrite: { 
-        '^/graphql/query': '/graphql/query/'
-    },
-    headers: {
-        "Referer": "https://www.instagram.com",
-        "Origin": "https://www.instagram.com"
-    }
-}));
+app.get('/graphql/query', (req, res) => {
+    let proxyUrl = 'https://www.instagram.com';
+    fetch(proxyUrl + req.originalUrl, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+            "Referer": proxyUrl,
+            "Origin": proxyUrl
+        }
+    })
+        .then(response => response.json())
+        .then(json => res.json(json))
+        .catch(error => res.status(500).json({ error: error.message }));
+});
 
 app.listen(port, () => console.log(`Proxy server listening on port ${port}!`));
 
