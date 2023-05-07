@@ -10,6 +10,7 @@ app.use(cors());
 
 app.get('/', (req, res) => {
     res.send("Hello from me!!");
+    console.log(`Hello from me `+new Date()+"\n");
 });
 app.get('/proxy', (req, res) => {
     const fileUrl = req.query.url; // Get the URL from the query parameter
