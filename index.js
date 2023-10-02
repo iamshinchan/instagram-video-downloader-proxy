@@ -47,6 +47,7 @@ app.post('/', async (req, res) => {
         const result = await myColl.insertOne(doc);
         res.json({ requestBody: result })
     } catch (ex) {
+        res.json(ex);
         console.log("Failed", ex);
     } finally {
         // Ensures that the client will close when you finish/error
@@ -70,6 +71,7 @@ app.post('/posts/many', async (req, res) => {
                         arr[i].thumbnail_src = 'data:image/png;base64,' + Buffer.from(await blob.arrayBuffer()).toString('base64');
                         resolve(arr[i]);
                     } catch (ex) {
+
                         resolve(arr[i]);
 
                     }
@@ -78,14 +80,15 @@ app.post('/posts/many', async (req, res) => {
         }
         await clientConnect();
         if (promises.length > 0) {
-            Promise.all(promises).then(async (res) => {
-                const result = await myColl.insertMany(arr);
+            Promise.all(promises).then(async (promise) => {
+                const result = await myColl.insertMany(promise);
                 res.json({ requestBody: result })
             })
         } else {
             res.json({ requestBody: null });
         }
     } catch (ex) {
+        res.json(ex);
         console.log("Failed", ex);
     } finally {
         // Ensures that the client will close when you finish/error
@@ -102,6 +105,7 @@ app.delete('/:id', async (req, res) => {
         const result = await myColl.deleteOne(query);
         res.json({ requestBody: result })
     } catch (ex) {
+        res.json(ex);
         console.log("Failed", ex);
     } finally {
         // Ensures that the client will close when you finish/error
@@ -116,15 +120,39 @@ app.get('/posts/all', async (req, res) => {
         const myDB = client.db(dbName);
         const myColl = myDB.collection(postsCollection);
         let params = req.query;
-        console.log(req)
-        const cursor = myColl.find({}).sort({ createdAt: -1 }).skip(parseInt(params.offset)).limit(parseInt(params.limit));
+        let query = [
+            {
+                $skip: parseInt(params.offset)
+            },
+            {
+                $sort: { createdAt: -1 }
+            },
+            {
+                $limit: parseInt(params.limit)
+            }
+        ]
+        let totalRecordsQuery = [
+            {
+                $count: "totalRecords"
+            }
+        ]
+        const cursor = myColl.aggregate(query);
+        const cursor1 = myColl.aggregate(totalRecordsQuery);
 
+        let result = {};
         // Print returned documents
         for await (const post of cursor) {
             arr.push(post);
         }
-        res.json(arr)
+        for await (const post of cursor1) {
+            result = post;
+        }
+        result.offset = params.offset;
+        result.limit = params.limit;
+        result.data = arr;
+        res.json(result);
     } catch (ex) {
+        res.json(ex);
         console.log("Failed", ex);
     } finally {
         // Ensures that the client will close when you finish/error
@@ -148,6 +176,105 @@ app.put('/posts', async (req, res) => {
         const result = await posts.updateMany(filter, updateDoc);
         res.json(result)
     } catch (ex) {
+        res.json(ex);
+        console.log("Failed", ex);
+    } finally {
+        // Ensures that the client will close when you finish/error
+        await clientClose();
+    }
+});
+
+app.get('/posts/update-img', async (req, res) => {
+    try {
+        await clientConnect();
+        const myDB = client.db(dbName);
+        const myColl = myDB.collection(postsCollection);
+        const result = await myColl.createIndex({ thumbnail_src: 1 });
+        console.log(`Index created: ${result}`);
+
+        const query = { $text: { $search: "-\"data:image/png;base64\"" } };
+
+        const cursor = myColl.find(query);
+
+        let promises = [], arr = [];
+        // Print returned documents
+        for await (const post of cursor) {
+            arr.push(post);
+        }
+        for (let i = 0; i < arr.length; i++) {
+            promises.push(
+                new Promise(async (resolve, reject) => {
+                    try {
+                        const response = await fetch(arr[i].thumbnail_src);
+                        const blob = await response.blob();
+                        arr[i].thumbnail_src = 'data:image/png;base64,' + Buffer.from(await blob.arrayBuffer()).toString('base64');
+                        resolve(arr[i]);
+                    } catch (ex) {
+
+                        res.json(ex);
+                        resolve(arr[i]);
+
+                    }
+                })
+            )
+        }
+        if (promises.length > 0) {
+            // Promise.all(promises).then(async (promiseArr) => {
+            //     let arr = [];
+            //     promiseArr.forEach(p=>{
+            //         arr.push(
+            //             {
+            //                 // Update documents that match the specified filter
+            //                 updateOne: {
+            //                     filter: { _id: p._id },
+            //                     update: { $set: { thumbnail_src: p.thumbnail_src } },
+            //                     upsert: true,
+            //                 },
+            //             })
+            //     })
+            //     const result = await myColl.bulkWrite(arr);
+            //     res.json({ requestBody: result })
+            // })
+        } else {
+            res.json({ requestBody: null });
+        }
+    } catch (ex) {
+        res.json(ex);
+        console.log("Failed", ex);
+    } finally {
+        // Ensures that the client will close when you finish/error
+        await clientClose();
+    }
+});
+
+app.delete('/posts/duplicates', async (req, res) => {
+    try {
+        await clientConnect();
+        const myDB = client.db(dbName);
+        const myColl = myDB.collection(postsCollection);
+        let duplicates = [];
+
+        const cursor = myColl.aggregate([,
+            { "$match": { "thumbnail_src": { "$ne": null } } },
+            { "$group": { "_id": "$thumbnail_src", "count": { "$sum": 1 } } },
+            { "$match": { "count": { "$gt": 1 } } },
+            {
+                $limit: 500
+            },
+            { "$project": { "thumbnail_src": "$_id", "_id": 0 } }
+        ], { "allowDiskUse": true });
+        let arr = [];
+        // Print returned documents
+        for await (const post of cursor) {
+            arr.push(post);
+        }
+        res.json({ requestBody: arr })
+
+        // const query = { _id: new ObjectId(req.params.id) };
+        // const result = await myColl.deleteOne(query);
+        // res.json({ requestBody: result })
+    } catch (ex) {
+        res.json(ex);
         console.log("Failed", ex);
     } finally {
         // Ensures that the client will close when you finish/error
