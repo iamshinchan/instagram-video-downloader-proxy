@@ -189,55 +189,70 @@ app.get('/posts/update-img', async (req, res) => {
         await clientConnect();
         const myDB = client.db(dbName);
         const myColl = myDB.collection(postsCollection);
-        const result = await myColl.createIndex({ thumbnail_src: 1 });
-        console.log(`Index created: ${result}`);
 
-        const query = { $text: { $search: "-\"data:image/png;base64\"" } };
+        const query = [
+            {
+                $match: {
+                    thumbnail_src: {
+                        $exists: true
+                    }
+                }
+            },
+            {
+                $addFields: {
+                    results: { $regexMatch: { input: "$thumbnail_src", regex: /^((?!data:image).)*$/s} }
+                }
+            },
+            {
+                $limit: parseInt(500)
+            }
+        ];
 
-        const cursor = myColl.find(query);
+        const cursor = myColl.aggregate(query);
 
         let promises = [], arr = [];
         // Print returned documents
         for await (const post of cursor) {
             arr.push(post);
         }
-        for (let i = 0; i < arr.length; i++) {
-            promises.push(
-                new Promise(async (resolve, reject) => {
-                    try {
-                        const response = await fetch(arr[i].thumbnail_src);
-                        const blob = await response.blob();
-                        arr[i].thumbnail_src = 'data:image/png;base64,' + Buffer.from(await blob.arrayBuffer()).toString('base64');
-                        resolve(arr[i]);
-                    } catch (ex) {
+        res.json({ requestBody: arr });
+        // for (let i = 0; i < arr.length; i++) {
+        //     promises.push(
+        //         new Promise(async (resolve, reject) => {
+        //             try {
+        //                 const response = await fetch(arr[i].thumbnail_src);
+        //                 const blob = await response.blob();
+        //                 arr[i].thumbnail_src = 'data:image/png;base64,' + Buffer.from(await blob.arrayBuffer()).toString('base64');
+        //                 resolve(arr[i]);
+        //             } catch (ex) {
 
-                        res.json(ex);
-                        resolve(arr[i]);
+        //                 res.json(ex);
+        //                 resolve(arr[i]);
 
-                    }
-                })
-            )
-        }
-        if (promises.length > 0) {
-            // Promise.all(promises).then(async (promiseArr) => {
-            //     let arr = [];
-            //     promiseArr.forEach(p=>{
-            //         arr.push(
-            //             {
-            //                 // Update documents that match the specified filter
-            //                 updateOne: {
-            //                     filter: { _id: p._id },
-            //                     update: { $set: { thumbnail_src: p.thumbnail_src } },
-            //                     upsert: true,
-            //                 },
-            //             })
-            //     })
-            //     const result = await myColl.bulkWrite(arr);
-            //     res.json({ requestBody: result })
-            // })
-        } else {
-            res.json({ requestBody: null });
-        }
+        //             }
+        //         })
+        //     )
+        // }
+        // if (promises.length > 0) {
+        //     // Promise.all(promises).then(async (promiseArr) => {
+        //     //     let arr = [];
+        //     //     promiseArr.forEach(p=>{
+        //     //         arr.push(
+        //     //             {
+        //     //                 // Update documents that match the specified filter
+        //     //                 updateOne: {
+        //     //                     filter: { _id: p._id },
+        //     //                     update: { $set: { thumbnail_src: p.thumbnail_src } },
+        //     //                     upsert: true,
+        //     //                 },
+        //     //             })
+        //     //     })
+        //     //     const result = await myColl.bulkWrite(arr);
+        //     //     res.json({ requestBody: result })
+        //     // })
+        // } else {
+        //     res.json({ requestBody: null });
+        // }
     } catch (ex) {
         res.json(ex);
         console.log("Failed", ex);
@@ -254,25 +269,38 @@ app.delete('/posts/duplicates', async (req, res) => {
         const myColl = myDB.collection(postsCollection);
         let duplicates = [];
 
-        const cursor = myColl.aggregate([,
-            { "$match": { "thumbnail_src": { "$ne": null } } },
-            { "$group": { "_id": "$thumbnail_src", "count": { "$sum": 1 } } },
-            { "$match": { "count": { "$gt": 1 } } },
+        const cursor = myColl.aggregate([
             {
-                $limit: 500
+                $match: {
+                    shortcode: { "$ne": '' }  // discard selection criteria
+                }
             },
-            { "$project": { "thumbnail_src": "$_id", "_id": 0 } }
-        ], { "allowDiskUse": true });
-        let arr = [];
+            {
+                $group: {
+                    _id: { shortcode: "$shortcode" }, // can be grouped on multiple properties 
+                    dups: { "$addToSet": "$_id" },
+                    count: { "$sum": 1 }
+                }
+            },
+            {
+                $match: {
+                    count: { "$gt": 1 }    // Duplicates considered as count greater than one
+                }
+            }
+        ], { allowDiskUse: true });
+
         // Print returned documents
         for await (const post of cursor) {
-            arr.push(post);
+            post.dups.shift();      // First element skipped for deleting
+            post.dups.forEach(function (dupId) {
+                duplicates.push(dupId);   // Getting all duplicate ids
+            })
         }
-        res.json({ requestBody: arr })
 
-        // const query = { _id: new ObjectId(req.params.id) };
-        // const result = await myColl.deleteOne(query);
-        // res.json({ requestBody: result })
+        const query = { _id: { $in: duplicates } };
+        const result = await myColl.deleteMany(query);
+        res.json({ requestBody: result })
+
     } catch (ex) {
         res.json(ex);
         console.log("Failed", ex);
@@ -284,7 +312,9 @@ app.delete('/posts/duplicates', async (req, res) => {
 
 async function clientConnect() {
     return new Promise(async (resolve, reject) => {
-        await client.connect();
+        if (!isConnected()) {
+            await client.connect();
+        }
         resolve(true);
     })
 }
@@ -292,11 +322,15 @@ async function clientConnect() {
 function clientClose() {
     return new Promise(async (resolve, reject) => {
         setTimeout(async () => {
-            await client.close();
+            if (isConnected()) {
+                // await client.close();
+            }
             resolve(true);
         }, 1500)
     })
 }
-
+function isConnected() {
+    return !!client && !!client.topology && client.topology.isConnected()
+}
 app.listen(port, () => console.log(`Server listening on port ${port}!`));
 module.exports = { app }
